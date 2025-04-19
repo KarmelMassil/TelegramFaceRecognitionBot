@@ -1,6 +1,8 @@
 ﻿import os
 import cv2
 import asyncio
+import random
+import glob
 import numpy as np
 import face_recognition
 from dotenv import load_dotenv
@@ -22,8 +24,18 @@ os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
 user_states = {}
 TEMP_PHOTO = {}
 
+# Directory to store celeb images
+CELEB_DIR = "celebs"
+
+# List if tuples (encoding, celeb_name, image_path)
+celeb_encodings = []
+
 # Bot buttons
-main_menu = ReplyKeyboardMarkup([["Add face", "Recognize faces", "Reset faces"]], resize_keyboard=True)
+main_menu = ReplyKeyboardMarkup(
+    [["Add face", "Recognize faces"], ["Reset faces", "Similar celebs"]],
+    resize_keyboard=True
+)
+
 
 # --- COMMANDS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,6 +72,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("All known faces have been reset.")
         await update.message.reply_text("Choose an option:", reply_markup=main_menu)
 
+    elif text == "Similar celebs":
+        user_states[chat_id] = "AWAITING_CELEB_IMAGE"
+        await update.message.reply_text(
+            "Upload an image of a single person and I’ll find which celeb they look like.",
+            reply_markup=ReplyKeyboardRemove()
+    )
+
+
     else:
         await update.message.reply_text("Choose a valid option.", reply_markup=main_menu)
 
@@ -88,6 +108,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[chat_id] = None
         await asyncio.sleep(0.5)
         await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+
+    elif state == "AWAITING_CELEB_IMAGE":
+        await find_similar_celeb(photo_path, update)
+        os.remove(photo_path)
+        user_states[chat_id] = None
+        await asyncio.sleep(0.5)
+        await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+
 
 # --- NAME HANDLING ---
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,8 +183,49 @@ async def recognize_faces(photo_path, update):
     else:
         await update.message.reply_text("I don't recognize anyone in this image.")
 
+# --- CELEB ENCODING ---
+def load_celeb_encodings():
+    global celeb_encodings
+    for celeb_folder in os.listdir(CELEB_DIR):
+        celeb_path = os.path.join(CELEB_DIR, celeb_folder)
+        if os.path.isdir(celeb_path):
+            for img_file in glob.glob(os.path.join(celeb_path, "*.jpg")):
+                image = face_recognition.load_image_file(img_file)
+                encodings = face_recognition.face_encodings(image)
+                if encodings:
+                    celeb_encodings.append((encodings[0], celeb_folder, img_file))
+
+# --- SIMILAR CELEB LOGIC ---
+async def find_similar_celeb(photo_path, update):
+    image = face_recognition.load_image_file(photo_path)
+    unknown_encodings = face_recognition.face_encodings(image)
+
+    if not unknown_encodings:
+        await update.message.reply_text("No face found in that image.")
+        return
+
+    unknown = unknown_encodings[0]
+
+    best_match = None
+    best_distance = float("inf")
+
+    for encoding, celeb_name, img_path in celeb_encodings:
+        dist = np.linalg.norm(encoding - unknown)
+        if dist < best_distance:
+            best_distance = dist
+            best_match = (celeb_name, img_path)
+
+    if best_match:
+        celeb_name, img_path = best_match
+        await update.message.reply_text(f"The celeb that person looks like most is: *{celeb_name}*",
+                                        parse_mode="Markdown")
+        await update.message.reply_photo(photo=open(img_path, "rb"))
+    else:
+        await update.message.reply_text("Couldn't find a good match.")
+
 # --- MAIN ---
 if __name__ == '__main__':
+    load_celeb_encodings()
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
