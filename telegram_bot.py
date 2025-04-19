@@ -1,12 +1,13 @@
-import os
+﻿import os
 import cv2
+import asyncio
 import numpy as np
 import face_recognition
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ContextTypes, filters
 )
 
 # Load environment variables
@@ -41,17 +42,26 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "Add face":
         user_states[chat_id] = "AWAITING_FACE_IMAGE"
-        await update.message.reply_text("Upload an image with a single face.")
+        await update.message.reply_text(
+            "Upload an image with a single face.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
     elif text == "Recognize faces":
         user_states[chat_id] = "AWAITING_RECOGNITION_IMAGE"
-        await update.message.reply_text("Upload an image and I'll recognize known faces.")
+        await update.message.reply_text(
+            "Upload an image and I'll recognize known faces.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
     elif text == "Reset faces":
         for file in os.listdir(KNOWN_FACES_DIR):
             os.remove(os.path.join(KNOWN_FACES_DIR, file))
-        await update.message.reply_text("All known faces have been reset.", reply_markup=main_menu)
+        await update.message.reply_text("All known faces have been reset.")
+        await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+
     else:
         await update.message.reply_text("Choose a valid option.", reply_markup=main_menu)
-
 
 # --- IMAGE HANDLING ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -71,10 +81,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         TEMP_PHOTO[chat_id] = photo_path
         user_states[chat_id] = "AWAITING_NAME"
         await update.message.reply_text("Great! What is the name of the person in this image?")
+
     elif state == "AWAITING_RECOGNITION_IMAGE":
         await recognize_faces(photo_path, update)
         os.remove(photo_path)
         user_states[chat_id] = None
+        await asyncio.sleep(0.5)
+        await update.message.reply_text("Choose an option:", reply_markup=main_menu)
 
 # --- NAME HANDLING ---
 async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -92,10 +105,11 @@ async def handle_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         encoding = encodings[0]
         np.save(os.path.join(KNOWN_FACES_DIR, f"{name}.npy"), encoding)
-        await update.message.reply_text(f"Face saved as '{name}'!", reply_markup=main_menu)
+        await update.message.reply_text(f"Face saved as '{name}'!")
 
     os.remove(photo_path)
     user_states[chat_id] = None
+    await update.message.reply_text("Choose an option:", reply_markup=main_menu)
 
 # --- RECOGNITION LOGIC ---
 async def recognize_faces(photo_path, update):
@@ -140,8 +154,6 @@ async def recognize_faces(photo_path, update):
         await update.message.reply_text(f"I found: {', '.join(recognized_names)}")
     else:
         await update.message.reply_text("I don't recognize anyone in this image.")
-
- 
 
 # --- MAIN ---
 if __name__ == '__main__':
