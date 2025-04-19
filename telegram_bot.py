@@ -5,7 +5,10 @@ import random
 import glob
 import numpy as np
 import face_recognition
+import matplotlib.pyplot as plt
 from dotenv import load_dotenv
+from sklearn.manifold import TSNE
+from PIL import Image
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -25,14 +28,14 @@ user_states = {}
 TEMP_PHOTO = {}
 
 # Directory to store celeb images
-CELEB_DIR = "celebs"
+CELEB_DIR = "Celebs"
 
 # List if tuples (encoding, celeb_name, image_path)
 celeb_encodings = []
 
 # Bot buttons
 main_menu = ReplyKeyboardMarkup(
-    [["Add face", "Recognize faces"], ["Reset faces", "Similar celebs"]],
+    [["Add face", "Recognize faces"], ["Reset faces", "Similar celebs"], ["Map"]],
     resize_keyboard=True
 )
 
@@ -79,6 +82,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardRemove()
     )
 
+    elif text == "Map":
+        await update.message.reply_text("Generating the face map... Please wait...", reply_markup=ReplyKeyboardRemove())
+        await generate_face_map(update)
+        await asyncio.sleep(0.5)
+        await update.message.reply_text("Choose an option:", reply_markup=main_menu)
 
     else:
         await update.message.reply_text("Choose a valid option.", reply_markup=main_menu)
@@ -222,6 +230,50 @@ async def find_similar_celeb(photo_path, update):
         await update.message.reply_photo(photo=open(img_path, "rb"))
     else:
         await update.message.reply_text("Couldn't find a good match.")
+
+# --- FACE MAP LOGIC ---
+async def generate_face_map(update):
+    chat_id = update.message.chat_id
+    face_vectors = []
+    face_labels = []
+
+    # Load known user faces
+    for file in os.listdir(KNOWN_FACES_DIR):
+        if file.endswith(".npy"):
+            vector = np.load(os.path.join(KNOWN_FACES_DIR, file))
+            name = file.replace(".npy", "")
+            face_vectors.append(vector)
+            face_labels.append(name)
+
+    # Add celeb faces
+    for encoding, celeb_name, _ in celeb_encodings:
+        face_vectors.append(encoding)
+        face_labels.append(celeb_name)
+
+    if len(face_vectors) < 2:
+        await update.message.reply_text("Not enough faces to create a map.")
+        return
+
+    # Reduce to 2D
+    face_vectors = np.array(face_vectors)
+    perplexity = min(5, len(face_vectors) - 1)  # t-SNE requires perplexity < number of samples
+    tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity)
+    reduced = tsne.fit_transform(face_vectors)
+
+    # Plot
+    plt.figure(figsize=(10, 8))
+    for i, label in enumerate(face_labels):
+        x, y = reduced[i]
+        plt.scatter(x, y)
+        plt.text(x + 1, y + 1, label, fontsize=8)
+
+    map_path = f"face_map_{chat_id}.png"
+    plt.title("Face Similarity Map")
+    plt.savefig(map_path)
+    plt.close()
+
+    await update.message.reply_photo(photo=open(map_path, "rb"))
+    os.remove(map_path)
 
 # --- MAIN ---
 if __name__ == '__main__':
