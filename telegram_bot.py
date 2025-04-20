@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 from sklearn.manifold import TSNE
 from PIL import Image
+from telegram.helpers import escape_markdown
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -35,7 +36,7 @@ celeb_encodings = []
 
 # Bot buttons
 main_menu = ReplyKeyboardMarkup(
-    [["Add face", "Recognize faces"], ["Reset faces", "Similar celebs"], ["Map"]],
+    [["Add face", "Recognize faces"], ["Reset faces", "Similar celebs"], ["Map", "Random face of the day"]],
     resize_keyboard=True
 )
 
@@ -87,6 +88,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await generate_face_map(update)
         await asyncio.sleep(0.5)
         await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+
+    elif text == "Random face of the day":
+        await update.message.reply_text("🎲 Picking a random face...", reply_markup=ReplyKeyboardRemove())
+        await send_random_face(update)
+        await asyncio.sleep(0.5)
+        await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+
 
     else:
         await update.message.reply_text("Choose a valid option.", reply_markup=main_menu)
@@ -274,6 +282,39 @@ async def generate_face_map(update):
 
     await update.message.reply_photo(photo=open(map_path, "rb"))
     os.remove(map_path)
+
+# --- RANDOM FACE LOGIC ---
+async def send_random_face(update):
+    # Load all available face entries
+    face_pool = []
+
+    # Add known faces (make sure .jpg exists)
+    for file in os.listdir(KNOWN_FACES_DIR):
+        if file.endswith(".npy"):
+            name = file.replace(".npy", "")
+            img_path = os.path.join(KNOWN_FACES_DIR, name + ".jpg")
+            if os.path.exists(img_path):
+                face_pool.append((name, img_path))
+
+    # Add celeb faces
+    for _, name, img_path in celeb_encodings:
+        face_pool.append((name, img_path))
+
+    # Check pool size
+    if not face_pool:
+        await update.message.reply_text("❌ No faces available yet!")
+        return
+
+    # Pick one
+    name, img_path = random.choice(face_pool)
+
+    # Send it
+    await update.message.reply_photo(
+        photo=open(img_path, "rb"),
+        caption=f"🎉 *Today's featured face:*\n{escape_markdown(name, version=2)}",
+        parse_mode="MarkdownV2"
+    )
+
 
 # --- MAIN ---
 if __name__ == '__main__':
